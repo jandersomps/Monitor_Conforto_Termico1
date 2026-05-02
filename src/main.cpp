@@ -2,6 +2,8 @@
 #include <PubSubClient.h>
 #include <DHT.h>
 #include <Adafruit_SSD1306.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 // --- CONFIGURAÇÕES ---
 const char* ssid = "Li&Jandinho";
@@ -18,6 +20,12 @@ DHT dht(DHTPIN, DHTTYPE);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+// Configuração NTP (UTC -3 para Brasília)
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -3 * 3600, 60000);
+
+const char* diasSemana[] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"};
 
 int telaAtual = 0;
 unsigned long lastMsg = 0;
@@ -68,6 +76,11 @@ void setup() {
 
   client.setServer(mqtt_server, 1883);
   
+  // Inicializa NTP
+  timeClient.begin();
+  timeClient.update();
+  Serial.println("NTP sincronizado!");
+  
   dht.begin();
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -77,6 +90,9 @@ void setup() {
 void loop() {
   if (!client.connected()) reconnect();
   client.loop();
+  
+  // Atualiza hora periodicamente
+  timeClient.update();
 
   // Alternar tela com o botão
   if (digitalRead(BUTTON_PIN) == LOW) {
@@ -95,6 +111,15 @@ void loop() {
       client.publish("home/quarto/temp", String(t).c_str());
       client.publish("home/quarto/umid", String(h).c_str());
       
+      // Obtém data e hora
+      time_t epochTime = timeClient.getEpochTime();
+      struct tm *ptm = gmtime(&epochTime);
+      int diaSemana = timeClient.getDay();
+      int dia = ptm->tm_mday;
+      int mes = ptm->tm_mon + 1;
+      int ano = ptm->tm_year + 1900;
+      String horaFormatada = timeClient.getFormattedTime();
+      
       // Atualiza o Display
       display.clearDisplay();
       display.setTextSize(1);
@@ -102,13 +127,24 @@ void loop() {
       display.setCursor(0,0);
       
       if(telaAtual == 0) {
-        display.println("CONFORTO TERMICO");
-        display.printf("\nTemp: %.1f C", t);
-        display.printf("\nUmid: %.1f %%", h);
+        // Tela principal com data/hora e dados
+        display.printf("%s %02d/%02d/%d", diasSemana[diaSemana], dia, mes, ano);
+        display.setCursor(0, 12);
+        display.setTextSize(2);
+        display.printf("%s", horaFormatada.c_str());
+        display.setTextSize(1);
+        display.setCursor(0, 32);
+        display.println("---------------");
+        display.setCursor(0, 42);
+        display.printf("Temp: %.1fC", t);
+        display.setCursor(0, 54);
+        display.printf("Umid: %.1f%%", h);
       } else {
+        // Tela de status da rede
         display.println("STATUS REDE");
         display.printf("\nWiFi: Conectado");
         display.printf("\nIP: %s", WiFi.localIP().toString().c_str());
+        display.printf("\n\nMQTT: %s", client.connected() ? "OK" : "Desconectado");
       }
       display.display();
     }
