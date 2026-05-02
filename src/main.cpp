@@ -155,9 +155,11 @@ void loop() {
     } else {
       // Tela de status da rede
       display.println("STATUS REDE");
-      display.printf("\nWiFi: Conectado");
-      display.printf("\nIP: %s", WiFi.localIP().toString().c_str());
-      display.printf("\n\nMQTT: %s", client.connected() ? "OK" : "Desconectado");
+      display.println("---------------");
+      display.printf("SSID: %s\n", WiFi.SSID().c_str());
+      display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+      display.printf("Sinal: %d dBm\n", WiFi.RSSI());
+      display.printf("\nMQTT: %s", client.connected() ? "OK" : "Erro");
     }
     display.display();
   }
