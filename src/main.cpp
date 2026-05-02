@@ -29,6 +29,9 @@ const char* diasSemana[] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"};
 
 int telaAtual = 0;
 unsigned long lastMsg = 0;
+unsigned long lastDisplayUpdate = 0;
+float ultimaTemp = 0;
+float ultimaUmid = 0;
 
 void setup_wifi() {
   delay(10);
@@ -101,52 +104,61 @@ void loop() {
   }
 
   unsigned long now = millis();
-  if (now - lastMsg > 5000) { // Envia a cada 5 segundos
+  
+  // Lê sensor e publica MQTT a cada 5 segundos
+  if (now - lastMsg > 5000) {
     lastMsg = now;
     float h = dht.readHumidity();
     float t = dht.readTemperature();
 
     if (!isnan(h) && !isnan(t)) {
+      ultimaTemp = t;
+      ultimaUmid = h;
       // Publicando dados para o HA
       client.publish("home/quarto/temp", String(t).c_str());
       client.publish("home/quarto/umid", String(h).c_str());
-      
-      // Obtém data e hora
-      time_t epochTime = timeClient.getEpochTime();
-      struct tm *ptm = gmtime(&epochTime);
-      int diaSemana = timeClient.getDay();
-      int dia = ptm->tm_mday;
-      int mes = ptm->tm_mon + 1;
-      int ano = ptm->tm_year + 1900;
-      String horaFormatada = timeClient.getFormattedTime();
-      
-      // Atualiza o Display
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(WHITE);
-      display.setCursor(0,0);
-      
-      if(telaAtual == 0) {
-        // Tela principal com data/hora e dados
-        display.printf("%s %02d/%02d/%d", diasSemana[diaSemana], dia, mes, ano);
-        display.setCursor(0, 12);
-        display.setTextSize(2);
-        display.printf("%s", horaFormatada.c_str());
-        display.setTextSize(1);
-        display.setCursor(0, 32);
-        display.println("---------------");
-        display.setCursor(0, 42);
-        display.printf("Temp: %.1fC", t);
-        display.setCursor(0, 54);
-        display.printf("Umid: %.1f%%", h);
-      } else {
-        // Tela de status da rede
-        display.println("STATUS REDE");
-        display.printf("\nWiFi: Conectado");
-        display.printf("\nIP: %s", WiFi.localIP().toString().c_str());
-        display.printf("\n\nMQTT: %s", client.connected() ? "OK" : "Desconectado");
-      }
-      display.display();
     }
+  }
+  
+  // Atualiza display a cada 500ms para hora em tempo real
+  if (now - lastDisplayUpdate > 500) {
+    lastDisplayUpdate = now;
+    
+    // Obtém data e hora
+    time_t epochTime = timeClient.getEpochTime();
+    struct tm *ptm = gmtime(&epochTime);
+    int diaSemana = timeClient.getDay();
+    int dia = ptm->tm_mday;
+    int mes = ptm->tm_mon + 1;
+    int ano = ptm->tm_year + 1900;
+    String horaFormatada = timeClient.getFormattedTime();
+    
+    // Atualiza o Display
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    
+    if(telaAtual == 0) {
+      // Tela principal com data/hora e dados
+      display.printf("%s %02d/%02d/%d", diasSemana[diaSemana], dia, mes, ano);
+      display.setCursor(0, 12);
+      display.setTextSize(2);
+      display.printf("%s", horaFormatada.c_str());
+      display.setTextSize(1);
+      display.setCursor(0, 32);
+      display.println("---------------");
+      display.setCursor(0, 42);
+      display.printf("Temp: %.1fC", ultimaTemp);
+      display.setCursor(0, 54);
+      display.printf("Umid: %.1f%%", ultimaUmid);
+    } else {
+      // Tela de status da rede
+      display.println("STATUS REDE");
+      display.printf("\nWiFi: Conectado");
+      display.printf("\nIP: %s", WiFi.localIP().toString().c_str());
+      display.printf("\n\nMQTT: %s", client.connected() ? "OK" : "Desconectado");
+    }
+    display.display();
   }
 }
