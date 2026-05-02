@@ -4,15 +4,17 @@
 #include <Adafruit_SSD1306.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+#include <WiFiManager.h>
+#include <Preferences.h>
 
 // --- CONFIGURAÇÕES ---
-const char* ssid = "Li&Jandinho";
-const char* password = "w26j21_12032022";
-const char* mqtt_server = "192.168.2.30"; // Ex: 192.168.1.100
+// Servidor MQTT (será configurado via portal)
+char mqtt_server[40] = "192.168.2.30"; // Valor padrão
 
 #define DHTPIN 4
 #define DHTTYPE DHT11
-#define BUTTON_PIN 14
+#define BUTTON_PIN 14        // Botão para alternar telas
+#define RESET_BUTTON_PIN 12  // Botão para resetar configurações
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
@@ -32,28 +34,63 @@ unsigned long lastMsg = 0;
 unsigned long lastDisplayUpdate = 0;
 float ultimaTemp = 0;
 float ultimaUmid = 0;
+unsigned long resetButtonPressTime = 0;
+bool resetConfigMode = false;
+
+Preferences preferences;
 
 void setup_wifi() {
-  delay(10);
-  Serial.print("Conectando em: ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  int tentativas = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    tentativas++;
-    if (tentativas > 20) { // Se passar de 10 segundos
-       Serial.println("\nFalha ao conectar. Verificando sinal...");
-       tentativas = 0;
-    }
+  WiFiManager wm;
+  
+  // Carrega o servidor MQTT salvo
+  preferences.begin("mqtt-config", false);
+  String savedServer = preferences.getString("server", "192.168.2.30");
+  savedServer.toCharArray(mqtt_server, 40);
+  preferences.end();
+  
+  // Cria campo customizado para o servidor MQTT
+  WiFiManagerParameter custom_mqtt_server("server", "Servidor MQTT", mqtt_server, 40);
+  wm.addParameter(&custom_mqtt_server);
+  
+  // Callback quando salvar configurações
+  wm.setSaveParamsCallback([]() {
+    Serial.println("Salvando configurações...");
+  });
+  
+  // Define timeout do portal (3 minutos)
+  wm.setConfigPortalTimeout(180);
+  
+  // Mostra no display que está configurando
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0,0);
+  display.println("CONFIGURACAO WiFi");
+  display.println("\nConecte em:");
+  display.println("ESP32_ConfortoAP");
+  display.println("\nAcesse:");
+  display.println("192.168.4.1");
+  display.display();
+  
+  // Tenta conectar, se falhar abre o portal
+  if (!wm.autoConnect("ESP32_ConfortoAP", "12345678")) {
+    Serial.println("Falha ao conectar e timeout atingido");
+    delay(3000);
+    ESP.restart();
   }
-
+  
   Serial.println("\nWiFi conectado!");
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
+  
+  // Salva o servidor MQTT
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  preferences.begin("mqtt-config", false);
+  preferences.putString("server", mqtt_server);
+  preferences.end();
+  
+  Serial.print("Servidor MQTT configurado: ");
+  Serial.println(mqtt_server);
 }
 void reconnect() {
   while (!client.connected()) {
@@ -75,6 +112,22 @@ void setup() {
   delay(2000); // Dá 2 segundos para o monitor serial estabilizar
   Serial.println("\n--- ESP32 INICIALIZADO ---");
   
+  // Inicializa o display ANTES de tudo
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("Falha ao inicializar display!");
+    for(;;); // Loop infinito se falhar
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0,20);
+  display.println("  Iniciando...");
+  display.display();
+  delay(1000);
+  
+  // Agora configura WiFi (que usa o display)
   setup_wifi();
 
   client.setServer(mqtt_server, 1883);
@@ -85,9 +138,6 @@ void setup() {
   Serial.println("NTP sincronizado!");
   
   dht.begin();
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
 }
 
 void loop() {
@@ -97,10 +147,53 @@ void loop() {
   // Atualiza hora periodicamente
   timeClient.update();
 
-  // Alternar tela com o botão
-  if (digitalRead(BUTTON_PIN) == LOW) {
+  // Botão para alternar telas (pressão simples)
+  static bool lastButtonState = HIGH;
+  bool currentButtonState = digitalRead(BUTTON_PIN);
+  
+  if (lastButtonState == HIGH && currentButtonState == LOW) {
     telaAtual = !telaAtual;
-    delay(200); // Debounce simples
+    delay(200); // Debounce
+  }
+  lastButtonState = currentButtonState;
+  
+  // Botão de RESET (segurar por 3 segundos)
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+    if (resetButtonPressTime == 0) {
+      resetButtonPressTime = millis();
+      // Mostra aviso no display
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+      display.setCursor(0,20);
+      display.println("  Segure para");
+      display.println("  resetar...");
+      display.display();
+    }
+    // Segurando por 3 segundos reseta as configurações
+    if (millis() - resetButtonPressTime > 3000 && !resetConfigMode) {
+      resetConfigMode = true;
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+      display.setCursor(0,20);
+      display.println("  RESETANDO...");
+      display.println("\n  Configuracoes");
+      display.println("  apagadas!");
+      display.display();
+      delay(2000);
+      
+      WiFiManager wm;
+      wm.resetSettings();
+      preferences.begin("mqtt-config", false);
+      preferences.clear();
+      preferences.end();
+      
+      ESP.restart();
+    }
+  } else {
+    // Botão de reset solto
+    resetButtonPressTime = 0;
   }
 
   unsigned long now = millis();
